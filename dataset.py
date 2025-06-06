@@ -1,42 +1,61 @@
 import os
 import sys
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from PIL import Image
-import numpy as np
 import glob
+
+import cv2
+import numpy as np
 from torch.utils.data import Dataset
-from utils import *
 from albumentations.pytorch import ToTensorV2
+from utils import sobel_transform
 
 class CustomDataset(Dataset):
-    def __init__(self,root_path,img_transforms=None):
-        self.image_paths =  glob.glob(root_path + '/images/*.jpg')+glob.glob(root_path + '/images/*.tif')\
-                            + glob.glob(root_path + '/images/*.ppm')
-        self.mask_paths = glob.glob(root_path + '/mask/*.png')+glob.glob(root_path + '/mask/*.tif')\
-                            + glob.glob(root_path + '/mask/*.ppm')
+    def __init__(self, root_path, img_transforms=None):
+        self.image_paths = (
+            glob.glob(os.path.join(root_path, 'images', '*.jpg')) +
+            glob.glob(os.path.join(root_path, 'images', '*.tif')) +
+            glob.glob(os.path.join(root_path, 'images', '*.ppm'))
+        )
+        self.mask_paths = (
+            glob.glob(os.path.join(root_path, 'mask', '*.png')) +
+            glob.glob(os.path.join(root_path, 'mask', '*.tif')) +
+            glob.glob(os.path.join(root_path, 'mask', '*.ppm'))
+        )
 
         self.image_transforms = img_transforms
-        self.name = root_path.split('/')[-3]
+        self.name = os.path.basename(os.path.dirname(root_path))
+
     def get_name(self):
         return self.name
+
     def __len__(self):
         return len(self.image_paths)
-    def __getitem__(self,index):
+
+    def __getitem__(self, index):
         image_path = self.image_paths[index]
         mask_path = self.mask_paths[index]
 
-        image = np.array(Image.open(image_path).convert('L').convert('RGB'),dtype=np.uint8)
-        mask = np.ceil(np.array(Image.open(mask_path),dtype=np.uint8)/255).astype(np.uint8)
+        image_gray = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        if image_gray is None:
+            raise FileNotFoundError(f"Cannot read image: {image_path}")
+        image = cv2.cvtColor(image_gray, cv2.COLOR_GRAY2RGB)
+
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            raise FileNotFoundError(f"Cannot read mask: {mask_path}")
+        mask = np.ceil(mask / 255.0).astype(np.uint8)
+
         if self.image_transforms:
-            t = self.image_transforms(image = image,mask=mask)
-            image = t['image']
-            mask  = t['mask']
-            edge = ToTensorV2()(image=sobel_transform(image.clone().detach().cpu().numpy().transpose(1,2,0)))['image']
+            transformed = self.image_transforms(image=image, mask=mask)
+            image = transformed['image']
+            mask = transformed['mask']
+
+            edge_np = sobel_transform(image.clone().detach().cpu().numpy().transpose(1, 2, 0))
+            edge = ToTensorV2()(image=edge_np)['image']
         else:
-            raise Exception('img_transforms is compulsory for dataset class')
+            raise ValueError('img_transforms is required for the dataset')
+
         return {
-            'image':image,
-            'mask':mask,
-            'edge':edge
+            'image': image,
+            'mask': mask,
+            'edge': edge
         }
